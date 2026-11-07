@@ -13,5 +13,11 @@ add_compile_options(
 	"$<$<COMPILE_LANGUAGE:CXX>:-march=native;-ffp-contract=off;-Wall;-Wextra>"
 )
 
+add_library(jacobi_common STATIC
+	src/common/config.cpp
+	src/common/timing.cpp
+)
+target_include_directories(jacobi_common PUBLIC include)
+
 add_executable(jacobi_seq src/seq/main.cpp)
-target_include_directories(jacobi_seq PRIVATE include)
+target_link_libraries(jacobi_seq PRIVATE jacobi_common)
