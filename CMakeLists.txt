@@ -15,6 +15,8 @@ add_compile_options(
 
 add_library(jacobi_common STATIC
 	src/common/config.cpp
+	src/common/grid.cpp
+	src/common/output.cpp
 	src/common/timing.cpp
 )
 target_include_directories(jacobi_common PUBLIC include)
