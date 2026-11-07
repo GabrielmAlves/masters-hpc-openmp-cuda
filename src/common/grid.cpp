@@ -7,7 +7,7 @@ namespace {
 	constexpr std::size_t kAlignment = 64; // tamanho da linha de cache
 	
 	[[noreturn]] void fail(const char* message) {
-		std::fprint(stderr, "erro: %s\n", message);
+		std::fprintf(stderr, "erro: %s\n", message);
 		std::exit(2);
 	}
 
@@ -16,22 +16,17 @@ namespace {
 			return i == 0 ? 100.0 : 0.0;
 		}
 
-		switch (i) {
-			case 0: return 100.0;
-			case n - 1: return 25.0;
-		}
-
-		switch (j) {
-			case 0: return 75.0;
-			case n - 1: return 50.0;
-		}
+		if (i == 0) return 100.0;
+		if (i == n - 1) return 25.0;
+		if (j == 0) return 75.0;
+		if (j == n - 1) return 50.0;
 
 		return static_cast<double>(1 + (31*i + 17*j) % 100);
 	}
 } // namespace
 
 GridPtr alloc_grid(std::size_t n) {
-	if (n > (SIZE_MAX / sizeof(double)) / n) {
+	if (n > (SIZE_MAX / sizeof(double)) / n) { // SIZE_MAX eh o maior valor que o size_t guarda
 		fail("matriz grande demais");
 	}
 	const std::size_t bytes = n*n*sizeof(double);
@@ -40,7 +35,7 @@ GridPtr alloc_grid(std::size_t n) {
 	void* pointer = std::aligned_alloc(kAlignment, rounded);
 
 	if (pointer == nullptr) {
-		fail("sem meoria para a matriz");
+		fail("sem memória para a matriz");
 	}
 
 	return GridPtr(static_cast<double*>(pointer));
