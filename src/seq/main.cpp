@@ -16,12 +16,9 @@ int main(int argc, char** argv) {
 	const double* result = nullptr;
 
 	for (int rep = 0; rep < o.reps; rep++) {
-		// As bordas precisam existir nos dois buffers, pois eles trocam de papel.
-		// Reinicializa a cada repetição para que todas partam do mesmo estado.
 		init_rows(a.get(), o.n, o.init, 0, o.n);
 		init_rows(b.get(), o.n, o.init, 0, o.n);
 
-		// Mede só o laço principal, sem inicialização nem gravação.
 		const double start = now_seconds();
 		result = solve(a.get(), b.get(), o.n, o.iters);
 		const double elapsed = now_seconds() - start;

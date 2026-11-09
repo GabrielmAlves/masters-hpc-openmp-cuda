@@ -1,9 +1,12 @@
 #include "output.hpp"
 
+#include <climits>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <system_error>
 
 namespace {
 
@@ -57,4 +60,40 @@ void write_grid(const std::string& path, const double* a, std::size_t n, int ite
 	if (!written || !closed) {
 		fail("falha ao gravar " + path);
 	}
+}
+
+GridPtr read_grid(const std::string& path, std::size_t& n, int& iters) {
+	std::FILE* f = std::fopen(path.c_str(), "rb");
+	if (f == nullptr) {
+		fail("não foi possível abrir " + path);
+	}
+
+	GridFileHeader h{};
+	if (std::fread(&h, sizeof h, 1, f) != 1) {
+		fail("cabeçalho incompleto em " + path);
+	}
+	if (std::memcmp(h.magic, "JACOBI2D", sizeof h.magic) != 0) {
+		fail(path + " não é um arquivo JACOBI2D");
+	}
+	if (h.n == 0 || h.n > (SIZE_MAX / sizeof(double)) / h.n || h.iters > INT_MAX) {
+		fail("cabeçalho inválido em " + path);
+	}
+
+	const std::size_t count = h.n * h.n;
+	std::error_code ec;
+	const auto size = std::filesystem::file_size(path, ec);
+	if (ec || size != sizeof h + count * sizeof(double)) {
+		fail("tamanho inesperado em " + path + " (truncado ou com dados sobrando)");
+	}
+
+	GridPtr a = alloc_grid(h.n);
+	const bool read_all = std::fread(a.get(), sizeof(double), count, f) == count;
+	std::fclose(f);
+	if (!read_all) {
+		fail("falha ao ler " + path);
+	}
+
+	n = h.n;
+	iters = static_cast<int>(h.iters);
+	return a;
 }

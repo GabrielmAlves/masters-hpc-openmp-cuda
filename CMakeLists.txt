@@ -26,3 +26,6 @@ add_executable(jacobi_seq
 	src/seq/solver.cpp
 )
 target_link_libraries(jacobi_seq PRIVATE jacobi_common)
+
+add_executable(compare tools/compare.cpp)
+target_link_libraries(compare PRIVATE jacobi_common)
