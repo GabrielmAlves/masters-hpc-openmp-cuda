@@ -27,5 +27,13 @@ add_executable(jacobi_seq
 )
 target_link_libraries(jacobi_seq PRIVATE jacobi_common)
 
+find_package(OpenMP REQUIRED)
+
+add_executable(jacobi_omp
+	src/omp/main.cpp
+	src/omp/solver.cpp
+)
+target_link_libraries(jacobi_omp PRIVATE jacobi_common OpenMP::OpenMP_CXX)
+
 add_executable(compare tools/compare.cpp)
 target_link_libraries(compare PRIVATE jacobi_common)
