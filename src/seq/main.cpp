@@ -1,18 +1,36 @@
 #include "config.hpp"
 #include "grid.hpp"
 #include "output.hpp"
+#include "solver.hpp"
+#include "timing.hpp"
 
-// Provisório: testa o módulo output. O método de Jacobi ainda não está aqui.
 int main(int argc, char** argv) {
 	const Options o = parse_args(argc, argv);
 
-	print_csv_header();
-	print_csv_row({"seq", 1002, 1000, 1, 0, 2.0, 0.0});
+	if (o.header) {
+		print_csv_header();
+	}
 
 	GridPtr a = alloc_grid(o.n);
-	init_rows(a.get(), o.n, o.init, 0, o.n);
+	GridPtr b = alloc_grid(o.n);
+	const double* result = nullptr;
+
+	for (int rep = 0; rep < o.reps; rep++) {
+		// As bordas precisam existir nos dois buffers, pois eles trocam de papel.
+		// Reinicializa a cada repetição para que todas partam do mesmo estado.
+		init_rows(a.get(), o.n, o.init, 0, o.n);
+		init_rows(b.get(), o.n, o.init, 0, o.n);
+
+		// Mede só o laço principal, sem inicialização nem gravação.
+		const double start = now_seconds();
+		result = solve(a.get(), b.get(), o.n, o.iters);
+		const double elapsed = now_seconds() - start;
+
+		print_csv_row({"seq", o.n, o.iters, 1, rep, elapsed, 0.0});
+	}
+
 	if (!o.dump.empty()) {
-		write_grid(o.dump, a.get(), o.n, o.iters);
+		write_grid(o.dump, result, o.n, o.iters);
 	}
 
 	return 0;

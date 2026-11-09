@@ -21,5 +21,8 @@ add_library(jacobi_common STATIC
 )
 target_include_directories(jacobi_common PUBLIC include)
 
-add_executable(jacobi_seq src/seq/main.cpp)
+add_executable(jacobi_seq
+	src/seq/main.cpp
+	src/seq/solver.cpp
+)
 target_link_libraries(jacobi_seq PRIVATE jacobi_common)
