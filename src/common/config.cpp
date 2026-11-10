@@ -68,6 +68,31 @@ Options parse_args(int argc, char** argv) {
 			o.dump = next_value(argc, argv, a);
 		} else if (arg == "--header") {
 			o.header = true;
+		} else if (arg == "--variant") {
+			o.variant = next_value(argc, argv, a);
+		} else if (arg == "--tile") {
+			o.tile = static_cast<int>(parse_integer(arg, next_value(argc, argv, a), 1, 1 << 16));
+		} else if (arg == "--tsteps") {
+			o.tsteps = static_cast<int>(parse_integer(arg, next_value(argc, argv, a), 1, 1 << 10));
+		} else if (arg == "--bx") {
+			o.bx = static_cast<int>(parse_integer(arg, next_value(argc, argv, a), 1, 1024));
+		} else if (arg == "--by") {
+			o.by = static_cast<int>(parse_integer(arg, next_value(argc, argv, a), 1, 1024));
+		} else if (arg == "--coarsen") {
+			o.coarsen = static_cast<int>(parse_integer(arg, next_value(argc, argv, a), 1, 1024));
+		} else if (arg == "--prec") {
+			const std::string prec = next_value(argc, argv, a);
+			if (prec == "double") {
+				o.use_float = false;
+			} else if (prec == "float") {
+				o.use_float = true;
+			} else {
+				fail("--prec precisa ser double ou float: " + prec);
+			}
+		} else if (arg == "--pinned") {
+			o.pinned = true;
+		} else if (arg == "--graph") {
+			o.graph = true;
 		} else {
 			fail("argumento desconhecido: " + arg);
 		}

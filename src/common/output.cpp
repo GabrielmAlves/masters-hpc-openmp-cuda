@@ -26,15 +26,15 @@ static_assert(sizeof(GridFileHeader) == 24, "o cabeçalho não pode ter preenchi
 } // namespace
 
 void print_csv_header() {
-	std::puts("version,N,iters,threads,rep,t_loop,t_transfer,mlups");
+	std::puts("version,variant,prec,N,iters,threads,bx,by,rep,t_loop,t_transfer,mlups");
 }
 
 void print_csv_row(const RunRecord& r) {
 	const double inner = static_cast<double>(r.n - 2);
 	const double mlups = r.t_loop > 0.0 ? inner * inner * r.iters / (r.t_loop * 1e6) : 0.0;
 
-	std::printf("%s,%zu,%d,%d,%d,%.6f,%.6f,%.1f\n", r.version, r.n, r.iters, r.threads, r.rep,
-				r.t_loop, r.t_transfer, mlups);
+	std::printf("%s,%s,%s,%zu,%d,%d,%d,%d,%d,%.6f,%.6f,%.1f\n", r.version, r.variant.c_str(),
+				r.prec, r.n, r.iters, r.threads, r.bx, r.by, r.rep, r.t_loop, r.t_transfer, mlups);
 
 	// Não perde linhas já medidas se o job for interrompido.
 	std::fflush(stdout);

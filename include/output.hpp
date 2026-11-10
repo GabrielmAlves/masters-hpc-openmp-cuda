@@ -8,9 +8,13 @@
 // Dados de uma execução medida, uma linha do CSV.
 struct RunRecord {
 	const char* version; // "seq", "omp" ou "cuda"
+	std::string variant; // variante do algoritmo, com os parâmetros relevantes
+	const char* prec;    // "double" ou "float"
 	std::size_t n;
 	int iters;
-	int threads;
+	int threads; // threads da CPU; no CUDA, threads por bloco
+	int bx;      // CUDA: dimensões do bloco (0 nas versões de CPU)
+	int by;
 	int rep;
 	double t_loop;     // segundos no laço principal
 	double t_transfer; // segundos em transferências (0 nas versões de CPU)

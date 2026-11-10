@@ -1,0 +1,11 @@
+[size] sequencial
+[omp_threads] variantes x threads x tamanhos
+[affinity] políticas de afinidade
+[omp_temporal] tile x tsteps
+[vectorization] sem vetorização, SSE2, AVX2
+[cuda_blocks] kernels x dimensões do bloco
+[cuda_coarsen] linhas por thread
+[cuda_size] kernels x tamanhos
+  melhores blocos: int32=64 2 shared=64 4 coarse=64 4 temporal=64 8 1
+  VALIDAÇÃO FALHOU: cuda_int32_float N=512
+concluído em 1041 s. Resultados em results/raw/
