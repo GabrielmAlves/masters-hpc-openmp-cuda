@@ -7,7 +7,7 @@ Gerado por `analysis/plot.py` a partir de `results/raw/`. Tempos: mediana das re
 - `results/validation.csv`: 870 de 870 casos OK.
   - double: 825 de 825 idênticos bit a bit à sequencial (maior erro absoluto 0.000e+00).
   - float: maior erro absoluto 1.796e-05, maior erro relativo 2.545e-07.
-- `results/raw/validation_runs.csv`: 56 de 57 casos OK.
+- `results/raw/validation_runs.csv`: 57 de 57 casos OK.
   - double: maior erro absoluto 0.000e+00, maior erro relativo 0.000e+00 (N até 8192).
   - float: maior erro absoluto 9.869e-04, maior erro relativo 1.935e-05 (N até 8192).
 

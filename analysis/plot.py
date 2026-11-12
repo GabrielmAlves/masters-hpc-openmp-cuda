@@ -514,7 +514,7 @@ for name in ("validation", "raw/validation_runs"):
             val_lines.append(f"  - float: maior erro absoluto {max(float(r['erro_abs']) for r in flt):.3e}, "
                              f"maior erro relativo {max(float(r['erro_rel']) for r in flt):.3e}.")
     else:
-        for prec, cond in (("double", lambda r: r["tol"] == "1e-12"), ("float", lambda r: r["tol"] == "1e-5")):
+        for prec, cond in (("double", lambda r: r["tol"] == "1e-12"), ("float", lambda r: r["tol"] != "1e-12")):
             sel = [r for r in vrows if cond(r)]
             if sel:
                 val_lines.append(f"  - {prec}: maior erro absoluto {max(float(r['erro_abs']) for r in sel):.3e}, "

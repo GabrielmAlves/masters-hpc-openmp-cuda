@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Relatório Jacobi 2D</title>
+<style>
+  @page {
+    size: A4;
+    margin: 20mm 18mm 20mm 18mm;
+    @bottom-center { content: counter(page); font: 9pt "Segoe UI", sans-serif; color: #555; }
+  }
+  @page :first { @bottom-center { content: none; } }
+  :root { --ink: #1b1b1b; --muted: #555; --rule: #c9c9c9; --accent: #1f4e79; --soft: #f3f5f8; }
+  html { background: #fff; }
+  body { font-family: Cambria, "Times New Roman", serif; font-size: 10.5pt; line-height: 1.42; color: var(--ink); margin: 0; background: #fff; }
+  h1, h2, h3, .sans, th, figcaption, .cover { font-family: "Segoe UI", Calibri, sans-serif; }
+  h1 { font-size: 20pt; margin: 0 0 4pt; color: var(--accent); }
+  h2 { font-size: 13.5pt; color: var(--accent); margin: 18pt 0 6pt; padding-bottom: 2pt; border-bottom: 1px solid var(--rule); break-after: avoid; }
+  h3 { font-size: 11pt; margin: 12pt 0 4pt; break-after: avoid; }
+  p { margin: 0 0 6pt; text-align: justify; hyphens: auto; }
+  ul, ol { margin: 0 0 6pt; padding-left: 18pt; }
+  li { margin-bottom: 2pt; }
+  code { font-family: Consolas, "Courier New", monospace; font-size: 9pt; background: var(--soft); padding: 0 2px; border-radius: 2px; }
+  pre { font-family: Consolas, "Courier New", monospace; font-size: 8.4pt; line-height: 1.3; background: var(--soft); border-left: 3px solid var(--accent); padding: 6pt 8pt; margin: 4pt 0 8pt; white-space: pre-wrap; break-inside: avoid; }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  table { border-collapse: collapse; width: 100%; margin: 4pt 0 10pt; font-size: 9pt; break-inside: avoid; }
+  th { background: var(--soft); font-weight: 600; font-size: 8.6pt; text-align: left; }
+  th, td { border: 1px solid var(--rule); padding: 2.5pt 5pt; vertical-align: top; }
+  td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  caption { caption-side: top; text-align: left; font-family: "Segoe UI", Calibri, sans-serif; font-size: 8.8pt; color: var(--muted); padding-bottom: 3pt; }
+  figure { margin: 6pt 0 10pt; break-inside: avoid; text-align: center; }
+  figure img { max-width: 100%; }
+  figcaption { font-size: 8.8pt; color: var(--muted); text-align: left; margin-top: 3pt; }
+  .cover { margin-bottom: 14pt; padding-bottom: 8pt; border-bottom: 2px solid var(--accent); }
+  .cover .sub { font-size: 12pt; color: var(--muted); margin-bottom: 6pt; }
+  .cover .meta { font-size: 9.5pt; color: var(--ink); }
+  .abstract { background: var(--soft); padding: 8pt 10pt; margin: 8pt 0 10pt; font-size: 10pt; }
+  .abstract p:last-child { margin-bottom: 0; }
+  .key { font-weight: bold; }
+  .pb { break-before: page; }
+  .small { font-size: 9pt; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <h1>Método de Jacobi 2D: versões sequencial, OpenMP e CUDA</h1>
+  <div class="sub">Implementação, validação numérica, otimizações e análise de desempenho</div>
+  <div class="meta">
+    Gabriel M. Alves · Mestrado, Computação de Alto Desempenho (HPC) · Tarefa 3 · Novembro de 2026<br>
+    Código: <code>https://github.com/GabrielmAlves/masters-hpc-openmp-cuda</code>
+  </div>
+</div>
+
+<div class="abstract">
+<p><span class="key">Resumo.</span> Este relatório apresenta três implementações do método de Jacobi em duas dimensões (sequencial, OpenMP e CUDA), sua validação numérica e um estudo experimental de desempenho. O algoritmo faz cerca de 0,25 operação de ponto flutuante por byte movido e, por isso, é limitado pela banda de memória nas duas plataformas. Todas as variantes em <code>double</code> produzem resultado <b>idêntico bit a bit</b> ao da versão sequencial (erro absoluto e relativo iguais a zero). Na CPU, a paralelização direta fica presa ao teto de banda da RAM (no máximo 1,4× com dados fora da cache), e a <b>blocagem temporal</b> foi a otimização decisiva: <b>cerca de 8×</b> sobre a versão sequencial. Na GPU, o kernel básico com acesso coalescido já atinge cerca de 100% da banda medida (<b>cerca de 19×</b> sobre a sequencial em <code>double</code>). Ali, <i>shared memory</i> e <i>coarsening</i> não trazem ganho, e a blocagem temporal piora. Os ganhos vieram de reduzir os bytes movidos (<code>float</code>, 2×), o custo de lançamento (CUDA Graphs, até 2,8×) e o custo das transferências (memória <i>pinned</i>, 3,3×).</p>
+</div>
+
+<h2>1. Problema e algoritmo</h2>
+<p>O método de Jacobi resolve a equação de Laplace numa malha <i>N</i> × <i>N</i> com bordas fixas. A cada iteração, cada célula interna recebe a média dos quatro vizinhos da iteração anterior (<i>stencil</i> de 5 pontos):</p>
+<pre><code>novo[i][j] = 0.25 * (velho[i-1][j] + velho[i+1][j] + velho[i][j-1] + velho[i][j+1]),   1 ≤ i, j ≤ N-2</code></pre>
+<p>As leituras ocorrem em <code>velho</code> e as escritas em <code>novo</code>, então as células de uma mesma iteração são independentes e podem ser calculadas em paralelo. Entre iterações existe dependência. Todas as versões usam dois buffers contíguos (<code>A[i*N + j]</code>), trocam os ponteiros ao fim de cada iteração (sem copiar a matriz) e inicializam as bordas nos dois buffers.</p>
+<p><b>Matriz inicial (determinística).</b> As bordas valem 100 (topo), 25 (base), 75 (esquerda) e 50 (direita). O interior recebe <code>1 + (31·i + 17·j) mod 100</code>. Esse padrão não tem zeros no interior, o que evita os números subnormais que uma matriz inicial nula geraria nas regiões ainda não alcançadas pelas bordas e que distorceriam os tempos.</p>
+
+<h2>2. Ambiente experimental</h2>
+<table>
+<caption>Tabela 1: hardware e software (coletado por <code>scripts/collect_env.sh</code> em <code>results/env.txt</code>)</caption>
+<tr><th style="width:22%">Item</th><th>Valor</th></tr>
+<tr><td>CPU</td><td>Intel Core i5-13400F (híbrida): 6 núcleos P com Hyper-Threading + 4 núcleos E = 10 núcleos e 16 threads; L1d de 48 KB e L2 de 1,25 MB por núcleo P; L3 compartilhado de 20 MB; AVX2</td></tr>
+<tr><td>RAM</td><td>7,7 GiB visíveis no WSL 2; banda de cópia medida: 26 a 28 GB/s</td></tr>
+<tr><td>GPU</td><td>NVIDIA GeForce RTX 3060 (Ampere GA106, <code>sm_86</code>): 28 SMs, 12 GB de GDDR6 com barramento de 192 bits, L2 de 2,25 MB; banda teórica de 360 GB/s e banda de cópia medida de 332 GB/s; PCIe 4.0 x16</td></tr>
+<tr><td>Sistema</td><td>Windows 11 Pro + WSL 2 (kernel 5.15.133.1-microsoft-standard-WSL2), Ubuntu 24.04.1 LTS; driver NVIDIA 610.88</td></tr>
+<tr><td>Compiladores</td><td>GCC 13.3.0 com <code>-O3 -march=native -ffp-contract=off -fopenmp</code>; CUDA 13.3 (<code>nvcc</code> V13.3.73) com <code>-arch=sm_86 --fmad=false</code>; CMake 3.28.3 (build <code>Release</code>)</td></tr>
+</table>
+<p><b>Limitação do ambiente.</b> O WSL apresenta a CPU como 8 núcleos × 2 threads e esconde a diferença entre núcleos P e E. Por isso, <code>OMP_PLACES=cores</code> não garante núcleos P, e o hipervisor pode mover as CPUs virtuais entre os núcleos físicos. O limite de 7,7 GiB de RAM fixou o maior tamanho em <i>N</i> = 8192 (1 GB para as duas matrizes).</p>
+
+<h2>3. Implementações</h2>
+<p>O projeto é compilado com CMake e gera três executáveis (<code>jacobi_seq</code>, <code>jacobi_omp</code> e <code>jacobi_cuda</code>), o comparador <code>compare</code> e dois medidores de banda. Todos aceitam as mesmas opções de linha de comando (<code>--n</code>, <code>--iters</code>, <code>--reps</code>, <code>--init</code>, <code>--dump</code>) e gravam uma linha CSV por repetição, com o tempo do laço, o tempo de transferência (GPU) e o desempenho em MLUPS (milhões de atualizações de célula por segundo).</p>
+
+<h3>3.1 Sequencial (referência)</h3>
+<p>Laço duplo por linha (<code>i</code> por fora, <code>j</code> por dentro), ponteiros <code>__restrict__</code> para as três linhas lidas e a linha escrita, e troca de ponteiros entre iterações. O GCC vetoriza o laço interno com AVX2 (4 <code>double</code> por instrução). A memória é alinhada em 64 bytes.</p>
+
+<h3>3.2 OpenMP</h3>
+<table>
+<caption>Tabela 2: variantes OpenMP (<code>--variant</code>)</caption>
+<tr><th style="width:14%">Variante</th><th>Descrição</th></tr>
+<tr><td><code>basic</code></td><td><code>#pragma omp parallel for schedule(static)</code> no laço de linhas, com uma região paralela por iteração. A inicialização é feita em paralelo com a mesma divisão de linhas (<i>first touch</i>).</td></tr>
+<tr><td><code>single</code></td><td>Uma única região <code>parallel</code> para todas as iterações, com <code>omp for</code> dentro. Cada thread troca a sua cópia privada dos ponteiros, e a barreira implícita do <code>for</code> separa as iterações. Elimina o custo de abrir e fechar a região a cada iteração.</td></tr>
+<tr><td><code>temporal</code></td><td><b>Blocagem temporal com sobreposição.</b> Cada bloco de <code>tile × tile</code> células é copiado, com um halo de <code>tsteps</code> células, para dois buffers locais da thread, que cabem na L2. O bloco avança <code>tsteps</code> iterações localmente e só então o miolo volta para a matriz global. A RAM passa a ser lida e gravada uma vez a cada <code>tsteps</code> iterações, ao custo de recalcular o halo, que encolhe uma célula por passo. Os blocos são distribuídos com <code>omp for collapse(2) schedule(static)</code>.</td></tr>
+</table>
+<pre><code>// basic: laço paralelo por linhas (src/omp/solver.cpp)
+#pragma omp parallel for schedule(static)
+for (size_t i = 1; i &lt; n - 1; i++) {
+    const double *up = in + (i-1)*n, *middle = in + i*n, *down = in + (i+1)*n;
+    double* dst = out + i*n;
+    for (size_t j = 1; j &lt; n - 1; j++)
+        dst[j] = 0.25*(up[j] + down[j] + middle[j-1] + middle[j+1]);
+}</code></pre>
+
+<h3>3.3 CUDA</h3>
+<p>O host aloca a matriz inicial e a matriz de resultado separadamente (para que cada repetição comece do mesmo estado), envia a matriz inicial para os dois buffers da GPU, executa as iterações trocando os ponteiros no host e traz o resultado de volta. Antes de medir, faz um aquecimento (criação do contexto e carga do kernel). O tempo do laço é medido com <code>steady_clock</code>, sincronizando com a GPU antes de parar o cronômetro, e as transferências (2 envios e 1 retorno) são medidas à parte.</p>
+<table>
+<caption>Tabela 3: kernels CUDA (<code>--variant</code>) e opções</caption>
+<tr><th style="width:16%">Kernel</th><th>Descrição</th></tr>
+<tr><td><code>basic</code></td><td>Uma thread por célula interna: <code>x</code> → coluna e <code>y</code> → linha, de modo que threads vizinhas de um <i>warp</i> acessam endereços contíguos (acesso coalescido). Índices <code>size_t</code>.</td></tr>
+<tr><td><code>int32</code></td><td>Igual ao <code>basic</code>, com índices <code>int</code> (menos instruções de endereço).</td></tr>
+<tr><td><code>uncoalesced</code></td><td>Contraexemplo: <code>x</code> → linha. As threads de um <i>warp</i> tocam 32 linhas diferentes, e os acessos não coalescem.</td></tr>
+<tr><td><code>shared</code></td><td>Cada bloco carrega a sua região e um halo de uma célula em <i>shared memory</i> e calcula a partir dela.</td></tr>
+<tr><td><code>coarse</code></td><td>Cada thread calcula <code>coarsen</code> linhas da mesma coluna e reaproveita em registradores os valores de cima e de baixo.</td></tr>
+<tr><td><code>temporal</code></td><td>Blocagem temporal em <i>shared memory</i>: o bloco carrega a região com halo de <code>tsteps</code> células e avança <code>tsteps</code> iterações por lançamento, com <code>__syncthreads()</code> entre os passos.</td></tr>
+<tr><td>Opções</td><td><code>--bx</code>/<code>--by</code> (dimensões do bloco), <code>--prec float|double</code>, <code>--pinned</code> (memória do host fixada, para DMA direto) e <code>--graph</code> (100 lançamentos gravados num CUDA Graph e repetidos).</td></tr>
+</table>
+<pre><code>// basic / int32 (src/cuda/solver.cu)
+template &lt;typename T, typename Idx&gt;
+__global__ void sweep_global(const T* __restrict__ in, T* __restrict__ out, Idx n) {
+    const Idx j = (Idx)blockIdx.x*blockDim.x + threadIdx.x + 1;   // coluna
+    const Idx i = (Idx)blockIdx.y*blockDim.y + threadIdx.y + 1;   // linha
+    if (i &lt; n - 1 &amp;&amp; j &lt; n - 1)
+        out[i*n + j] = T(0.25)*(in[(i-1)*n + j] + in[(i+1)*n + j] + in[i*n + j-1] + in[i*n + j+1]);
+}</code></pre>
+
+<h3>3.4 Metodologia de medição</h3>
+<ul>
+  <li><b>Tamanhos:</b> <i>N</i> = 256, 512, 1024, 2048, 4096 e 8192. As duas matrizes <code>double</code> ocupam 1 MB, 4 MB, 16 MB, 64 MB, 256 MB e 1 GB, cobrindo L2, L3 e RAM.</li>
+  <li><b>Iterações:</b> 15000, 4000, 1000, 250, 60 e 16, respectivamente, para manter cerca de 10<sup>9</sup> atualizações por execução e tempos comparáveis entre tamanhos.</li>
+  <li><b>Repetições:</b> 5 por configuração (3 nos experimentos de parâmetros). Reporta-se a <b>mediana</b>. Mede-se só o laço principal, sem inicialização nem gravação em disco.</li>
+  <li><b>Métricas:</b> speedup <i>S</i> = <i>T</i><sub>seq</sub> / <i>T</i><sub>par</sub> (sempre em relação à versão <b>sequencial</b>, não ao OpenMP com 1 thread), eficiência <i>E</i> = <i>S</i> / <i>p</i> e MLUPS = (<i>N</i>−2)² · iterações / (<i>T</i> · 10<sup>6</sup>). 1 GLUPS = 1000 MLUPS.</li>
+  <li><b>Automação:</b> <code>scripts/run_experiments.sh</code> roda os 8 experimentos (2574 medições, 1041 s), e <code>analysis/plot.py</code> gera os gráficos e as tabelas. Cada configuração medida também é validada contra a sequencial.</li>
+</ul>
+
+<h2>4. Validação numérica</h2>
+<p>O programa <code>compare</code> lê duas matrizes binárias (com <i>N</i> e número de iterações no cabeçalho, recusando execuções diferentes), percorre <b>todos os elementos</b> e informa o maior erro absoluto e o maior erro relativo, com a posição, além de detectar NaN e infinito:</p>
+<pre><code>erro_abs(i,j) = |A_teste(i,j) − A_seq(i,j)|        erro_rel(i,j) = erro_abs(i,j) / |A_seq(i,j)|</code></pre>
+<p>Onde a referência é zero, o critério usa o erro absoluto. <b>Tolerâncias adotadas</b> (erro relativo máximo): <b>10<sup>−12</sup> em <code>double</code></b> e <b>10<sup>−4</sup> em <code>float</code></b>. Em <code>float</code>, a tolerância inicial era 10<sup>−5</sup>, mas um caso sem erro de implementação ficou fora dela (<i>N</i> = 512 com 4000 iterações, erro de 1,9·10<sup>−5</sup>). O erro do <code>float</code> (cerca de 6·10<sup>−8</sup> por operação) acumula ao longo das iterações, e 10<sup>−4</sup> deixa uma margem de cerca de 5× sobre o pior caso medido.</p>
+<table>
+<caption>Tabela 4: resultados da validação</caption>
+<tr><th>Conjunto</th><th>Casos</th><th>Resultado</th><th class="n">Maior erro abs.</th><th class="n">Maior erro rel.</th></tr>
+<tr><td><code>validate.sh</code>: todas as variantes OpenMP e CUDA em <code>double</code> (<i>N</i> = 5, 64, 513, 1001, 1024; 1, 100 e 101 iterações; 1, 3, 8 e 16 threads; blocos 16×16, 32×8, 128×1, 7×5 e outros; grafos, <i>pinned</i> e 2 repetições)</td><td class="n">825</td><td>825 idênticos bit a bit</td><td class="n">0</td><td class="n">0</td></tr>
+<tr><td><code>validate.sh</code>: CUDA em <code>float</code>, mesmos tamanhos</td><td class="n">45</td><td>45 OK</td><td class="n">1,8·10<sup>−5</sup></td><td class="n">2,5·10<sup>−7</sup></td></tr>
+<tr><td>Execuções dos experimentos em <code>double</code> (até <i>N</i> = 8192)</td><td class="n">51</td><td>51 OK, erro zero</td><td class="n">0</td><td class="n">0</td></tr>
+<tr><td>Execuções dos experimentos em <code>float</code> (até <i>N</i> = 8192, até 15000 iterações)</td><td class="n">6</td><td>6 OK</td><td class="n">9,9·10<sup>−4</sup></td><td class="n">1,9·10<sup>−5</sup></td></tr>
+</table>
+<p><b>Por que o resultado em <code>double</code> é exato.</b> Nenhuma variante faz redução, cada célula é calculada com a mesma expressão e a mesma ordem das somas (<code>cima + baixo + esquerda + direita</code>), e a contração em FMA está desligada (<code>-ffp-contract=off</code> na CPU e <code>--fmad=false</code> na GPU). Vetorização, ordem de execução das threads, formato do bloco CUDA e blocagem temporal não mudam a sequência de operações de nenhuma célula, então o resultado é reproduzido bit a bit. Isso é mais forte do que ficar dentro de uma tolerância.</p>
+
+<h2>5. Modelo de desempenho</h2>
+<p>Cada atualização lê 4 vizinhos e grava 1 valor com 4 operações de ponto flutuante. Como os vizinhos são reaproveitados pela cache entre células próximas, o tráfego mínimo com a memória principal é de <b>16 bytes por atualização</b> em <code>double</code> (8 de leitura e 8 de escrita), mais 8 bytes de <i>write-allocate</i> na CPU. A intensidade aritmética é de cerca de <b>0,25 FLOP/byte</b>, muito abaixo do ponto de equilíbrio das duas plataformas: <b>o algoritmo é limitado pela banda de memória</b> sempre que os dados não cabem na cache. Os tetos esperados, a partir das bandas medidas com programas de cópia (<code>tools/bandwidth_cpu.cpp</code> e <code>tools/bandwidth_gpu.cu</code>), são:</p>
+<table>
+<caption>Tabela 5: tetos de desempenho estimados pela banda de memória</caption>
+<tr><th>Plataforma</th><th class="n">Banda medida</th><th class="n">Bytes por atualização</th><th class="n">Teto</th></tr>
+<tr><td>CPU, dados na RAM</td><td class="n">27,9 GB/s</td><td class="n">16</td><td class="n">≈ 1,7 GLUPS</td></tr>
+<tr><td>GPU, <code>double</code></td><td class="n">332 GB/s (360 teórico)</td><td class="n">16</td><td class="n">≈ 20,8 GLUPS (22,5)</td></tr>
+<tr><td>GPU, <code>float</code></td><td class="n">332 GB/s</td><td class="n">8</td><td class="n">≈ 41,5 GLUPS</td></tr>
+</table>
+
+<h2>6. Resultados gerais e escalabilidade por tamanho</h2>
+<figure>
+  <img src="../results/figures/overview.png" alt="Desempenho e speedup por tamanho">
+  <figcaption>Figura 1: desempenho (GLUPS, só o laço) e speedup sobre a sequencial por tamanho da matriz. Eixo do speedup em escala logarítmica.</figcaption>
+</figure>
+<table>
+<caption>Tabela 6: tempo do laço da versão sequencial e speedup das demais versões (mediana de 5 repetições)</caption>
+<tr><th class="n">N</th><th class="n">Sequencial</th><th class="n">OpenMP basic (16 t)</th><th style="width:21%">Melhor OpenMP</th><th class="n">CUDA basic</th><th class="n">Melhor CUDA <code>double</code></th><th class="n">Melhor CUDA <code>float</code></th></tr>
+<tr><td class="n">256</td><td class="n">0,219 s</td><td class="n">2,0×</td><td>4,0× (<code>single</code>, 6 t)</td><td class="n">1,7×</td><td class="n">3,9× (grafos)</td><td class="n">9,4×</td></tr>
+<tr><td class="n">512</td><td class="n">0,314 s</td><td class="n">2,1×</td><td>6,1× (<code>single</code>, 6 t)</td><td class="n">3,8×</td><td class="n">6,2× (grafos)</td><td class="n">20,3×</td></tr>
+<tr><td class="n">1024</td><td class="n">0,384 s</td><td class="n">2,4×</td><td>4,0× (<code>temporal</code>, 4 t)</td><td class="n">7,8×</td><td class="n">7,8×</td><td class="n">14,3×</td></tr>
+<tr><td class="n">2048</td><td class="n">0,908 s</td><td class="n">1,1×</td><td>7,7× (<code>temporal</code>, 12 t)</td><td class="n">18,2×</td><td class="n">18,5×</td><td class="n">37,9×</td></tr>
+<tr><td class="n">4096</td><td class="n">0,862 s</td><td class="n">0,7×</td><td>7,9× (<code>temporal</code>, 12 t)</td><td class="n">19,4×</td><td class="n">19,4×</td><td class="n">37,5×</td></tr>
+<tr><td class="n">8192</td><td class="n">0,938 s</td><td class="n">1,0×</td><td>8,2× (<code>temporal</code>, 12 t)</td><td class="n">17,4×</td><td class="n">19,8×</td><td class="n">38,6×</td></tr>
+</table>
+<p><b>Sequencial.</b> O desempenho cai de 4,5 GLUPS (<i>N</i> = 256, dados na L2) para 2,7 GLUPS (<i>N</i> = 1024, no L3) e para cerca de 1,1 GLUPS quando os dados estão na RAM. Esses 1,1 GLUPS correspondem a cerca de 26 GB/s contando o <i>write-allocate</i>, perto da banda medida: <b>uma única thread já quase satura a memória</b>, o que explica o comportamento das versões paralelas na CPU.</p>
+<p><b>GPU por tamanho.</b> Com matrizes pequenas, o tempo de cada iteração na GPU (cerca de 10 µs para <i>N</i> = 256) é dominado pelo custo de lançar o kernel, e o desempenho fica baixo. A partir de <i>N</i> = 1024, a GPU fica no teto de banda e o desempenho se estabiliza em 21 a 22,6 GLUPS (<code>double</code>). O speedup sobre a sequencial cresce com <i>N</i> porque a CPU perde a cache e a GPU não perde nada.</p>
+
+<h2>7. OpenMP</h2>
+<h3>7.1 Escalabilidade por número de threads</h3>
+<figure>
+  <img src="../results/figures/omp_speedup_threads.png" alt="Speedup OpenMP por threads">
+  <figcaption>Figura 2: speedup sobre a sequencial em função do número de threads, para cada tamanho. A linha pontilhada é o speedup ideal.</figcaption>
+</figure>
+<table>
+<caption>Tabela 7: speedup da variante <code>basic</code> sobre a sequencial, por número de threads</caption>
+<tr><th class="n">N</th><th class="n">1</th><th class="n">2</th><th class="n">4</th><th class="n">6</th><th class="n">8</th><th class="n">10</th><th class="n">12</th><th class="n">14</th><th class="n">16</th></tr>
+<tr><td class="n">256</td><td class="n">1,07</td><td class="n">2,28</td><td class="n">3,01</td><td class="n">2,55</td><td class="n">2,69</td><td class="n">2,60</td><td class="n">3,24</td><td class="n">3,07</td><td class="n">1,96</td></tr>
+<tr><td class="n">512</td><td class="n">0,99</td><td class="n">2,00</td><td class="n">4,81</td><td class="n">5,52</td><td class="n">3,96</td><td class="n">5,10</td><td class="n">5,55</td><td class="n">3,82</td><td class="n">2,07</td></tr>
+<tr><td class="n">1024</td><td class="n">0,96</td><td class="n">1,92</td><td class="n">3,63</td><td class="n">3,79</td><td class="n">2,94</td><td class="n">3,38</td><td class="n">3,65</td><td class="n">3,64</td><td class="n">2,37</td></tr>
+<tr><td class="n">2048</td><td class="n">1,01</td><td class="n">1,10</td><td class="n">1,40</td><td class="n">1,40</td><td class="n">1,33</td><td class="n">1,30</td><td class="n">1,36</td><td class="n">1,12</td><td class="n">1,09</td></tr>
+<tr><td class="n">4096</td><td class="n">0,92</td><td class="n">0,94</td><td class="n">1,28</td><td class="n">1,20</td><td class="n">1,14</td><td class="n">1,16</td><td class="n">1,15</td><td class="n">1,02</td><td class="n">0,67</td></tr>
+<tr><td class="n">8192</td><td class="n">0,88</td><td class="n">0,98</td><td class="n">1,33</td><td class="n">1,19</td><td class="n">1,18</td><td class="n">1,22</td><td class="n">1,12</td><td class="n">1,02</td><td class="n">1,01</td></tr>
+</table>
+<ul>
+  <li><b>Dados na cache (<i>N</i> ≤ 1024):</b> o speedup chega a 3,2× (<i>N</i> = 256), 5,5× (<i>N</i> = 512) e 3,8× (<i>N</i> = 1024), e a eficiência cai rápido depois de 4 threads. Em <i>N</i> = 256, cada uma das 15000 iterações dura cerca de 15 µs, e abrir a região paralela e passar pela barreira custam caro em relação ao cálculo. Em <i>N</i> = 1024, as matrizes ocupam quase todo o L3 compartilhado, e a banda do L3 passa a limitar.</li>
+  <li><b>Dados na RAM (<i>N</i> ≥ 2048):</b> o speedup é só de 1,3× a 1,4×. A melhor marca, cerca de 1,6 GLUPS com 4 threads, equivale a cerca de 26 GB/s, ou <b>85% a 95% da banda de cópia medida</b>. A versão básica já está no teto, e mais threads não trazem os dados mais rápido. A própria cópia de memória atinge o máximo com 4 threads e cai depois (27,9 → 21,8 GB/s com 16 threads), o mesmo formato das curvas do Jacobi.</li>
+  <li><b>Acima de 12 threads, o desempenho piora.</b> As 16 CPUs virtuais ocupam todo o processador, e o Windows e o WSL disputam os mesmos núcleos. Basta uma thread ser interrompida para todas esperarem na barreira, que se repete a cada iteração. Os núcleos E, mais lentos, também atrasam as threads que caem neles, já que <code>schedule(static)</code> dá a mesma quantidade de linhas a todas. Nesta máquina, o recomendado é usar no máximo 12 threads.</li>
+  <li><b>OpenMP com 1 thread</b> fica entre 7% mais rápido e 12% mais lento que a sequencial, dentro da variação entre execuções somada ao custo da região paralela a cada iteração.</li>
+</ul>
+
+<h3>7.2 Região paralela única (<code>single</code>)</h3>
+<p>Ganha onde há muitas iterações curtas: o melhor speedup passa de 3,24× para 3,95× em <i>N</i> = 256 e de 5,55× para 6,06× em <i>N</i> = 512. Nos tamanhos grandes não muda nada: criar a região custa alguns microssegundos, desprezíveis diante de iterações de milissegundos. A barreira entre iterações continua necessária; só o custo de criar a região desaparece.</p>
+
+<h3>7.3 Blocagem temporal: a otimização de maior impacto na CPU</h3>
+<figure>
+  <img src="../results/figures/omp_temporal_params.png" alt="Parâmetros da blocagem temporal">
+  <figcaption>Figura 3: desempenho da blocagem temporal (GLUPS, 8 threads) em função do lado do bloco (<code>tile</code>) e do número de iterações por bloco (<code>tsteps</code>).</figcaption>
+</figure>
+<ul>
+  <li><b>Resultado com dados na RAM:</b> 8,8 a 9,4 GLUPS, contra 1,1 da sequencial e cerca de 1,5 da básica. É um speedup de <b>7,7× a 8,2×</b> sobre a sequencial e de <b>cerca de 6×</b> sobre a melhor configuração da básica, além de <b>mais de 5× acima do teto de banda</b> da RAM. Até com 1 thread ela é 2,4× mais rápida que a sequencial (<i>N</i> = 2048), porque o ganho vem do reaproveitamento dos dados na cache, não do paralelismo.</li>
+  <li><b>Sem reuso temporal</b> (<code>tsteps</code> = 1), o desempenho é igual ao da básica (0,8 a 1,1 GLUPS em <i>N</i> = 4096). Isso confirma que o ganho vem do reuso temporal, não da blocagem espacial.</li>
+  <li><b>Parâmetros.</b> Mais passos por bloco dividem o tráfego por <code>tsteps</code>, e o desempenho sobe até <code>tsteps</code> = 16 ou 32. Com <code>tile</code> = 32, o halo recalculado domina: com <code>tsteps</code> = 16, a região local tem (32 + 32)² células para produzir 32², ou 4× mais trabalho. Com <code>tile</code> = 256, os dois buffers locais (cerca de 1,3 MB) passam da L2 de um núcleo P (1,25 MB). O melhor é <code>tile</code> = 128 com <code>tsteps</code> = 16 ou 32 em <i>N</i> = 4096, e <code>tile</code> = 64 com <code>tsteps</code> = 8 em <i>N</i> = 1024, onde o ganho é pequeno porque o L3 já entrega banda suficiente.</li>
+  <li><b>Escalabilidade:</b> escala bem até 4 threads (7,3× a 7,4× com <i>N</i> ≥ 2048) e continua subindo devagar até 12 threads (7,7× a 8,2×). Cai com 16 threads, pelos mesmos motivos da básica. O limite agora é o processamento e a L2, não a RAM.</li>
+</ul>
+
+<h3>7.4 Afinidade</h3>
+<p>Foram comparados <code>OMP_PROC_BIND</code> = <code>close</code> e <code>spread</code> com <code>OMP_PLACES</code> = <code>cores</code> e <code>threads</code>, contra nenhuma fixação. <b>Não houve efeito consistente.</b> Com dados na RAM, fixar ganha até cerca de 10% com 4 threads (1,48 → 1,64 GLUPS). Com <i>N</i> = 1024, as diferenças ficam dentro da variação entre execuções, que é alta no WSL (com 12 threads, a mesma configuração deu 13,5 GLUPS num experimento e 9,9 em outro). O motivo provável é que, no WSL, as threads são fixadas em CPUs virtuais que o hipervisor continua movendo entre os núcleos físicos.</p>
+
+<h3>7.5 Vetorização</h3>
+<table>
+<caption>Tabela 8: efeito da vetorização (MLUPS, mediana), com builds separados: sem vetorização (<code>-fno-tree-vectorize -fno-tree-slp-vectorize</code>), SSE2 (<code>-march=x86-64</code>) e AVX2 (<code>-march=native</code>)</caption>
+<tr><th>Versão</th><th class="n">N</th><th class="n">Sem vet.</th><th class="n">SSE2</th><th class="n">AVX2</th><th class="n">AVX2 / sem vet.</th></tr>
+<tr><td>Sequencial</td><td class="n">256</td><td class="n">2.487</td><td class="n">3.652</td><td class="n">4.504</td><td class="n">1,81</td></tr>
+<tr><td>Sequencial</td><td class="n">1024</td><td class="n">2.079</td><td class="n">2.474</td><td class="n">2.727</td><td class="n">1,31</td></tr>
+<tr><td>Sequencial</td><td class="n">4096</td><td class="n">1.095</td><td class="n">1.074</td><td class="n">1.182</td><td class="n">1,08</td></tr>
+<tr><td>OpenMP basic, 8 t</td><td class="n">256</td><td class="n">6.642</td><td class="n">10.916</td><td class="n">12.083</td><td class="n">1,82</td></tr>
+<tr><td>OpenMP basic, 8 t</td><td class="n">1024</td><td class="n">7.547</td><td class="n">7.703</td><td class="n">9.762</td><td class="n">1,29</td></tr>
+<tr><td>OpenMP basic, 8 t</td><td class="n">4096</td><td class="n">1.509</td><td class="n">1.384</td><td class="n">1.436</td><td class="n">0,95</td></tr>
+</table>
+<p>Com dados na cache, o AVX2 dá de 1,3× a 1,8×, e o SSE2 fica no meio do caminho. O ganho fica longe dos 4× teóricos porque o laço já é limitado pela banda da cache. <b>Com dados na RAM, a vetorização não ajuda</b> (0,9× a 1,1×): quando o limite é a memória, fazer as contas mais rápido não muda nada. O resultado é idêntico bit a bit com e sem vetorização.</p>
+
+<h2>8. CUDA</h2>
+<h3>8.1 Versão básica e o teto de banda</h3>
+<p>Com <i>N</i> ≥ 1024, o kernel básico alcança <b>21 a 22,6 GLUPS em <code>double</code></b>, o que equivale a <b>340 a 360 GB/s</b> com 16 bytes por atualização: o mesmo que a cópia medida (332 GB/s, dentro da variação de cerca de 5% entre execuções) e de 94% a 100% do pico teórico. <b>O kernel básico já está no teto de banda da GPU.</b> É cerca de 19× a versão sequencial, o que o modelo de banda explica: a razão entre as bandas das duas memórias é de 332 / 27,9 ≈ 12×, e a CPU ainda move 24 bytes por atualização (com o <i>write-allocate</i>) contra 16 na GPU, o que dá 12 × 1,5 ≈ 18×. Também é 2,4× a melhor versão OpenMP com dados na RAM (blocagem temporal).</p>
+
+<h3>8.2 Dimensões do bloco de threads</h3>
+<figure>
+  <img src="../results/figures/cuda_blocks.png" alt="Desempenho por dimensão do bloco">
+  <figcaption>Figura 4: desempenho em <code>double</code> de quatro kernels para 15 formatos de bloco, com <i>N</i> = 1024 e <i>N</i> = 4096.</figcaption>
+</figure>
+<ul>
+  <li><b>Blocos com pelo menos 32 threads em <code>x</code></b> (64×2, 64×4, 128×2, 256×1) ficam entre 21 e 22,6 GLUPS. O melhor bloco com <i>N</i> = 4096 foi <b>64×2</b>.</li>
+  <li><b>8×8 e 16×8</b> perdem de 5% a 10%: um <i>warp</i> cobre mais de uma linha, e o acesso fica menos contínuo.</li>
+  <li><b>Blocos de 1024 threads</b> (32×32 e 1024×1) caem para 13 a 16 GLUPS. Um SM do <code>sm_86</code> comporta até 1536 threads, então só cabe um bloco de 1024 por SM, e a ocupação fica em 67%. Há também menos blocos para equilibrar o trabalho entre os 28 SMs. O <code>coarse</code> sofre menos nesses blocos (17 a 19,6 GLUPS), porque cada thread tem mais trabalho independente.</li>
+</ul>
+
+<h3>8.3 Variantes de kernel</h3>
+<figure>
+  <img src="../results/figures/cuda_size.png" alt="Kernels CUDA por tamanho">
+  <figcaption>Figura 5: à esquerda, os kernels em <code>double</code> por tamanho; à direita, <code>float</code> × <code>double</code> e o efeito dos CUDA Graphs.</figcaption>
+</figure>
+<table>
+<caption>Tabela 9: variantes de kernel (N ≥ 1024, <code>double</code>)</caption>
+<tr><th style="width:15%">Variante</th><th style="width:30%">Resultado</th><th>Explicação</th></tr>
+<tr><td><code>int32</code></td><td>Igual à <code>basic</code> com o mesmo bloco (±1%)</td><td>Menos instruções de endereço, mas o limite é a memória.</td></tr>
+<tr><td><code>uncoalesced</code></td><td><b>2× mais lenta</b> (10,5 a 11,5 GLUPS)</td><td>Cada <i>warp</i> toca 32 linhas diferentes, e cada acesso vira várias transações. Mostra a importância do acesso coalescido.</td></tr>
+<tr><td><code>shared</code></td><td>Igual (22,3 GLUPS)</td><td>As caches L1 e L2 já aproveitam o reuso entre vizinhos. A <i>shared memory</i> não reduz o tráfego com a memória global, que é o gargalo.</td></tr>
+<tr><td><code>coarse</code></td><td>Igual (22,1 GLUPS); de 1 a 16 linhas por thread dão quase o mesmo</td><td>Economiza leituras da cache, que não são o gargalo.</td></tr>
+<tr><td><code>temporal</code></td><td><b>Resultado negativo:</b> 17 a 18,6 GLUPS (31 em <code>float</code>, contra 40 da <code>int32</code>)</td><td>Ver abaixo.</td></tr>
+</table>
+<p><b>Por que a blocagem temporal não funcionou na GPU</b>, ao contrário da CPU:</p>
+<ol>
+  <li><b>Halo recalculado.</b> Com bloco 32×16 e <code>tsteps</code> = 2, só 28×12 = 336 das 512 threads produzem resultado (66%), e o desperdício cresce rápido com <code>tsteps</code>.</li>
+  <li><b>Sincronização.</b> Há um <code>__syncthreads()</code> a cada passo, e as threads da borda ficam ociosas enquanto a região válida encolhe.</li>
+  <li><b>Pouco poder de cálculo em <code>double</code>.</b> A GA106 faz contas em <code>double</code> a 1/64 da velocidade do <code>float</code> (cerca de 0,2 TFLOPS), e o trabalho redundante consome uma fração grande disso. Como o <code>float</code> também perde, a sincronização e o desperdício pesam pelo menos tanto quanto o <code>double</code>.</li>
+  <li><b>Pouco tráfego economizado.</b> A GPU já está no teto de banda, e o tráfego que sobra por lançamento (bloco com halo) ainda é grande. Mesmo com <code>tsteps</code> = 1 ela fica abaixo da <code>basic</code> (18,6 contra 22,6 GLUPS), o que mede o custo da própria estrutura. Uma implementação eficiente exigiria blocagem 2,5D com registradores.</li>
+</ol>
+
+<h3>8.4 Custo de lançamento e CUDA Graphs</h3>
+<p>Com <i>N</i> = 256, cada iteração dura cerca de 10 µs na GPU, e o tempo é dominado pelo lançamento do kernel (6 a 7 GLUPS). Gravando 100 lançamentos num CUDA Graph e repetindo o grafo, o desempenho vai a <b>17,4 GLUPS (2,8×)</b>. Em <i>N</i> = 512, vai de 12 a 14 para 20,6 GLUPS (1,5×). Com <i>N</i> ≥ 1024, os grafos não mudam nada: o kernel já é longo o bastante para esconder o custo de lançamento.</p>
+
+<h3>8.5 <code>float</code> × <code>double</code></h3>
+<p>Em <code>float</code>, a <code>int32</code> chega a <b>37 a 44 GLUPS</b> com <i>N</i> ≥ 1024, cerca de 2× a versão em <code>double</code>, porque move metade dos bytes. Isso bate com o teto de cerca de 41,5 GLUPS e é outra confirmação de que o limite é a banda de memória, não o processamento em <code>double</code> (que é 64× mais lento que o <code>float</code> nesta GPU, mas continua ocioso). Com <i>N</i> = 512 e grafos, chega a <b>67 GLUPS</b>: as duas matrizes somam 2 MB e cabem na L2 de 2,25 MB, então o gargalo deixa de ser a memória principal. O preço é a precisão: erro relativo de até 1,9·10<sup>−5</sup> (seção 4).</p>
+
+<h3>8.6 Transferências entre host e GPU</h3>
+<figure>
+  <img src="../results/figures/cuda_transfer.png" alt="Transferências host-GPU">
+  <figcaption>Figura 6: tempo das transferências (2 envios e 1 retorno) com memória paginável e <i>pinned</i>, e fração do tempo total gasta nelas.</figcaption>
+</figure>
+<p>Com <i>N</i> = 4096 (3 cópias de 128 MB), a memória paginável leva 54 ms (7,1 GB/s) e a <i>pinned</i>, 16 ms (23,6 GB/s, compatível com PCIe 4.0 x16): <b>3,3× mais rápido</b>. Com memória paginável, as transferências representam 55% do tempo total com <i>N</i> = 4096 (60 iterações) e 80% com <i>N</i> = 8192 (16 iterações); com <i>pinned</i>, 25% e 58%. Contando as transferências, o speedup de ponta a ponta com <i>N</i> = 8192 cai para 4,1× (paginável) e 8,2× (<i>pinned</i>), contra 19,8× só no laço. Esse peso depende do número de iterações: as transferências ocorrem uma vez e o laço cresce com as iterações, então numa execução até a convergência, com milhares de iterações, elas ficam desprezíveis.</p>
+
+<h2>9. Gargalos identificados e impacto das otimizações</h2>
+<table>
+<caption>Tabela 10: resumo das otimizações (dados na RAM, N ≥ 2048, salvo indicação)</caption>
+<tr><th style="width:26%">Otimização</th><th style="width:22%">Impacto</th><th>Motivo</th></tr>
+<tr><td>OpenMP <code>parallel for</code> (basic)</td><td>1,3× a 1,4× (até 5,5× na cache)</td><td>A RAM já está quase saturada com uma thread.</td></tr>
+<tr><td>Região paralela única</td><td>até +22% em <i>N</i> pequeno; nulo em <i>N</i> grande</td><td>Remove o custo de criar a região por iteração.</td></tr>
+<tr><td><b>Blocagem temporal (CPU)</b></td><td><b>≈ 6× sobre a basic; 7,7× a 8,2× sobre a sequencial</b></td><td>Reduz o tráfego com a RAM pelo fator <code>tsteps</code>.</td></tr>
+<tr><td>Afinidade de threads</td><td>até +10%, inconsistente</td><td>O WSL esconde a topologia real.</td></tr>
+<tr><td>Vetorização AVX2</td><td>1,3× a 1,8× na cache; nulo na RAM</td><td>Só ajuda quando o limite não é a memória.</td></tr>
+<tr><td>CUDA básico coalescido</td><td>≈ 19× sobre a sequencial</td><td>No teto de banda da GPU (≈ 12× a da CPU).</td></tr>
+<tr><td>Acesso não coalescido (contraexemplo)</td><td>2× mais lento</td><td>Mais transações por <i>warp</i>.</td></tr>
+<tr><td>Formato do bloco CUDA</td><td>até 1,6× entre o pior e o melhor</td><td>Coalescência em <code>x</code> e ocupação dos SMs.</td></tr>
+<tr><td><i>Shared memory</i>, <i>coarsening</i>, índices <code>int</code></td><td>nulo</td><td>Atacam a latência e as instruções, não a banda.</td></tr>
+<tr><td>Blocagem temporal (GPU)</td><td>−18% a −25% (negativo)</td><td>Recálculo do halo, sincronização e baixa ocupação.</td></tr>
+<tr><td><code>float</code></td><td>≈ 2×</td><td>Metade dos bytes por atualização.</td></tr>
+<tr><td>CUDA Graphs</td><td>até 2,8× (<i>N</i> = 256); nulo com <i>N</i> ≥ 1024</td><td>Reduz o custo de lançamento.</td></tr>
+<tr><td>Memória <i>pinned</i></td><td>transferências 3,3× mais rápidas</td><td>DMA direto, sem cópia intermediária.</td></tr>
+</table>
+
+<h2>10. Conclusões</h2>
+<ol>
+  <li><b>O gargalo é a banda de memória nas duas plataformas.</b> Com cerca de 0,25 FLOP por byte, as versões diretas (OpenMP básico e CUDA básico) já operam perto do teto medido: cerca de 90% na CPU e cerca de 100% na GPU. Por isso o modelo de banda prevê bem os resultados.</li>
+  <li><b>Na CPU,</b> paralelizar sem reduzir o tráfego dá no máximo 1,4× com dados na RAM. A blocagem temporal, que reaproveita os dados na cache por várias iterações, foi a otimização decisiva (cerca de 8× sobre a sequencial).</li>
+  <li><b>Na GPU,</b> a versão básica com acesso coalescido já fica no teto. As otimizações clássicas de acesso à memória não melhoram nada, e a blocagem temporal ingênua piora. O que funcionou foi reduzir os bytes (<code>float</code>), o custo de lançamento (grafos) e o custo das transferências (<i>pinned</i>).</li>
+  <li><b>A validação</b> mostrou resultado exato em <code>double</code> em todas as variantes, e erro relativo de até 1,9·10<sup>−5</sup> em <code>float</code>, dentro da tolerância de 10<sup>−4</sup>.</li>
+</ol>
+<p><b>Limitações e trabalhos futuros.</b> Os experimentos rodaram no WSL, que esconde os núcleos P e E e aumenta a variação entre execuções; rodar em Linux nativo permitiria medir a afinidade de verdade. Outros passos possíveis: blocagem temporal 2,5D na GPU (com <i>streaming</i> numa dimensão e registradores), comparação com uma GPU de datacenter, mais rápida em <code>double</code>, e uso do Nsight Compute para confirmar a banda efetiva dos kernels.</p>
+
+<h2>Apêndice: compilação e reprodução</h2>
+<pre><code>cmake -S . -B build -DCMAKE_BUILD_TYPE=Release     # jacobi_cuda só é gerado se houver nvcc
+cmake --build build -j
+./build/jacobi_seq  --n 4096 --iters 60 --reps 5 --header
+OMP_NUM_THREADS=12 ./build/jacobi_omp --variant temporal --tile 128 --tsteps 16 --n 4096 --iters 60
+./build/jacobi_cuda --variant int32 --bx 64 --by 2 --prec float --graph --pinned --n 4096 --iters 60
+./build/compare seq.bin teste.bin --tol 1e-12      # maiores erros absoluto e relativo
+scripts/validate.sh                                # validação completa → results/validation.csv
+scripts/collect_env.sh                             # ambiente → results/env.txt
+scripts/run_experiments.sh                         # experimentos → results/raw/*.csv
+.venv/bin/python analysis/plot.py                  # gráficos e tabelas → results/figures/, results/summary.md</code></pre>
+<p class="small">Todos os dados brutos (<code>results/raw/</code>), as figuras e a análise completa (<code>report/analise.md</code>) estão no repositório.</p>
+
+</body>
+</html>

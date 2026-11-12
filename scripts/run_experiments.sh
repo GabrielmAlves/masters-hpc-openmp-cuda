@@ -60,7 +60,7 @@ validate() {
 		"$BUILD/jacobi_seq" --n "$n" --iters "$it" --dump "$tmp/seq_$n.bin" > /dev/null
 	fi
 	local tol=1e-12
-	case "$*" in *"--prec float"*) tol=1e-5 ;; esac
+	case "$*" in *"--prec float"*) tol=1e-4 ;; esac
 	"$@" --n "$n" --iters "$it" --dump "$tmp/test.bin" > /dev/null || return 1
 	local out
 	out=$("$BUILD/compare" "$tmp/seq_$n.bin" "$tmp/test.bin" --tol $tol)

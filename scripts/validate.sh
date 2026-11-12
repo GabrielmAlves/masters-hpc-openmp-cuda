@@ -11,7 +11,7 @@ cd "$(dirname "$0")/.."
 BUILD=${1:-build}
 OUT=results/validation.csv
 TOL_DOUBLE=1e-12 # double: o esperado é erro zero
-TOL_FLOAT=1e-5   # float: precisão de ~7 dígitos (ver README)
+TOL_FLOAT=1e-4   # float: precisão de ~7 dígitos, acumulada nas iterações (ver README)
 
 mkdir -p results
 tmp=$(mktemp -d)

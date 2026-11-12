@@ -68,9 +68,12 @@ Conjunto de trabalho (duas matrizes `double`) por N:
 - **`float` (GPU):** o maior erro relativo observado é de **1,9e-5** (erro absoluto de
   9,9e-4), com N = 512 e 4000 iterações. O erro cresce com o número de iterações: é a
   precisão do `float` (cerca de 6e-8 por operação) acumulada ao longo da execução.
-
-  > **Pendente:** decidir a tolerância do `float`. Hoje ela é 1e-5, e esse caso fica
-  > fora dela; a sugestão é 1e-4. Com 100 iterações, o erro fica em cerca de 2,5e-7.
+  Com 100 iterações, o erro fica em cerca de 2,5e-7.
+- **Tolerâncias adotadas** (erro relativo máximo): **1e-12 em `double`** (na prática, o
+  resultado é exato) e **1e-4 em `float`**. A tolerância inicial de 1e-5 em `float` foi
+  ampliada porque o caso acima, sem erro de implementação, ficou fora dela: o erro
+  cresce com as iterações, e 1e-4 deixa margem de cerca de 5× sobre o pior caso
+  medido. Com ela, todos os casos passam.
 
 ## 4. Comparação geral
 

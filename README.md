@@ -107,9 +107,9 @@ iterações; várias quantidades de threads; blocos CUDA de vários formatos, in
 - **`double`:** todas as variantes dão resultado idêntico bit a bit ao da versão
   sequencial (erro 0). A ordem das somas é a mesma em todas, e a contração em FMA
   está desligada.
-- **`float`:** tolerância de `1e-5` (erro relativo). O erro relativo observado fica
-  na ordem de 1e-7 a 1e-6, compatível com a precisão do `float` (cerca de 6e-8 por
-  operação), acumulada ao longo das iterações.
+- **`float`:** tolerância de `1e-4` (erro relativo). O erro relativo observado vai de
+  cerca de 2e-7 (100 iterações) a 1,9e-5 (N = 512 com 4000 iterações): é a precisão do
+  `float` (cerca de 6e-8 por operação), acumulada ao longo das iterações.
 
 ## Experimentos
 
